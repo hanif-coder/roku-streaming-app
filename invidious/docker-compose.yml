@@ -1,0 +1,36 @@
+version: "3"
+
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: invidious
+      POSTGRES_PASSWORD: invidious
+      POSTGRES_DB: invidious
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  companion:
+    image: quay.io/invidious/invidious-companion:latest
+    restart: unless-stopped
+    environment:
+      SERVER_SECRET_KEY: PoUs3O0O9pnBLcP7
+      SERVER_PORT: 8282
+      HOST: "0.0.0.0"
+    ports:
+      - "8282:8282"
+
+  invidious:
+    image: quay.io/invidious/invidious:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - companion
+    volumes:
+      - ./config.yml:/invidious/config/config.yml
+
+volumes:
+  postgres_data:

@@ -1,0 +1,15 @@
+db:
+  host: postgres
+  port: 5432
+  user: invidious
+  password: invidious
+  dbname: invidious
+
+check_tables: true
+hmac_key: "randomhmacvalue12345"
+
+invidious_companion:
+  - private_url: "http://companion:8282/companion"
+invidious_companion_key: "PoUs3O0O9pnBLcP7"
+
+video_proxy: true

@@ -1,0 +1,12 @@
+
+> roku-streaming-app@1.0.0 start
+> node src/server.js
+
+[dotenv@17.3.1] injecting env (2) from .env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+Server running on port 5000
+
+> roku-streaming-app@1.0.0 start
+> node src/server.js
+
+[dotenv@17.3.1] injecting env (2) from .env -- tip: ⚙️  load multiple .env files with { path: ['.env.local', '.env'] }
+Server running on port 5000
