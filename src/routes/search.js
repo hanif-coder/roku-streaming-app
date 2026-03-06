@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 
@@ -7,7 +8,17 @@ const MIN_QUERY_LENGTH = 2;
 const execFileAsync = promisify(execFile);
 const YTDLP_TIMEOUT_MS = 30000;
 
-function mapItem(item) {
+function mapInvidiousItem(item) {
+  return {
+    videoId: item.videoId || '',
+    title: item.title || '',
+    author: item.author || '',
+    lengthSeconds: Number(item.lengthSeconds || 0) || 0,
+    thumbnails: item.videoThumbnails || item.thumbnails || [],
+  };
+}
+
+function mapYtDlpItem(item) {
   const videoId = item.id || item.videoId || '';
   return {
     videoId,
@@ -16,6 +27,20 @@ function mapItem(item) {
     lengthSeconds: Number(item.duration || item.lengthSeconds || 0) || 0,
     thumbnails: item.thumbnail ? [{ url: item.thumbnail }] : [],
   };
+}
+
+async function searchWithInvidious(query) {
+  const baseUrl = process.env.INVIDIOUS_BASE_URL;
+  if (!baseUrl) return null;
+
+  const url = `${baseUrl.replace(/\/$/, '')}/api/v1/search`;
+  const { data } = await axios.get(url, {
+    params: { q: query, type: 'video' },
+    timeout: 10000,
+  });
+
+  const items = Array.isArray(data) ? data : [];
+  return items.slice(0, 10).map(mapInvidiousItem);
 }
 
 async function searchWithYtDlp(query) {
@@ -43,14 +68,16 @@ async function searchWithYtDlp(query) {
       maxBuffer: 20 * 1024 * 1024,
     });
     const parsed = JSON.parse(stdout);
-    return Array.isArray(parsed.entries) ? parsed.entries : [];
+    const items = Array.isArray(parsed.entries) ? parsed.entries : [];
+    return items.slice(0, 10).map(mapYtDlpItem);
   } catch (err) {
     const { stdout } = await execFileAsync(ytDlpPath, fallbackArgs, {
       timeout: YTDLP_TIMEOUT_MS,
       maxBuffer: 20 * 1024 * 1024,
     });
     const parsed = JSON.parse(stdout);
-    return Array.isArray(parsed.entries) ? parsed.entries : [];
+    const items = Array.isArray(parsed.entries) ? parsed.entries : [];
+    return items.slice(0, 10).map(mapYtDlpItem);
   }
 }
 
@@ -70,13 +97,21 @@ router.get('/', async (req, res, next) => {
       return;
     }
 
-    const items = await searchWithYtDlp(query);
-    const top10 = items.slice(0, 10).map(mapItem);
+    let items = null;
+    try {
+      items = await searchWithInvidious(query);
+    } catch (_) {
+      items = null;
+    }
+
+    if (!items || items.length === 0) {
+      items = await searchWithYtDlp(query);
+    }
 
     res.json({
       success: true,
-      total: top10.length,
-      data: top10,
+      total: items.length,
+      data: items,
     });
   } catch (err) {
     if (err.code === 'ENOENT') {
