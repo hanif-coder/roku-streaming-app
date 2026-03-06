@@ -20,20 +20,38 @@ function mapItem(item) {
 
 async function searchWithYtDlp(query) {
   const ytDlpPath = process.env.YTDLP_PATH || 'yt-dlp';
-  const args = [
+  const baseArgs = [
     '--dump-single-json',
     '--no-warnings',
     '--skip-download',
+    '--flat-playlist',
+  ];
+  const primaryArgs = [
+    ...baseArgs,
+    `ytsearch10:${query}`,
+  ];
+  const fallbackArgs = [
+    ...baseArgs,
+    '--extractor-args',
+    'youtube:player_client=android',
     `ytsearch10:${query}`,
   ];
 
-  const { stdout } = await execFileAsync(ytDlpPath, args, {
-    timeout: YTDLP_TIMEOUT_MS,
-    maxBuffer: 20 * 1024 * 1024,
-  });
-
-  const parsed = JSON.parse(stdout);
-  return Array.isArray(parsed.entries) ? parsed.entries : [];
+  try {
+    const { stdout } = await execFileAsync(ytDlpPath, primaryArgs, {
+      timeout: YTDLP_TIMEOUT_MS,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout);
+    return Array.isArray(parsed.entries) ? parsed.entries : [];
+  } catch (err) {
+    const { stdout } = await execFileAsync(ytDlpPath, fallbackArgs, {
+      timeout: YTDLP_TIMEOUT_MS,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout);
+    return Array.isArray(parsed.entries) ? parsed.entries : [];
+  }
 }
 
 router.get('/', async (req, res, next) => {
@@ -76,6 +94,7 @@ router.get('/', async (req, res, next) => {
       return;
     }
     if (err.stderr) {
+      console.error('Search extraction stderr:', err.stderr);
       res.status(500).json({
         success: false,
         message: 'Search extraction failed',
