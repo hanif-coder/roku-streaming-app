@@ -34,22 +34,48 @@ function pickStreamUrl(meta) {
 
 async function getVideoMetaFromYtDlp(videoId) {
   const ytDlpPath = process.env.YTDLP_PATH || 'yt-dlp';
-  const args = [
+  const baseArgs = [
     '--no-playlist',
     '--dump-single-json',
     '--no-warnings',
     '--skip-download',
     '--format',
     'best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=mp4]/best',
-    buildWatchUrl(videoId),
+  ];
+  const cookiesFile = process.env.YTDLP_COOKIES_FILE;
+  const cookiesArgs = cookiesFile ? ['--cookies', cookiesFile] : [];
+  const attempts = [
+    [...baseArgs, ...cookiesArgs, buildWatchUrl(videoId)],
+    [
+      ...baseArgs,
+      ...cookiesArgs,
+      '--extractor-args',
+      'youtube:player_client=ios,android',
+      buildWatchUrl(videoId),
+    ],
+    [
+      ...baseArgs,
+      ...cookiesArgs,
+      '--extractor-args',
+      'youtube:player_client=android,web',
+      buildWatchUrl(videoId),
+    ],
   ];
 
-  const { stdout } = await execFileAsync(ytDlpPath, args, {
-    timeout: YTDLP_TIMEOUT_MS,
-    maxBuffer: 20 * 1024 * 1024,
-  });
+  let lastErr = null;
+  for (const args of attempts) {
+    try {
+      const { stdout } = await execFileAsync(ytDlpPath, args, {
+        timeout: YTDLP_TIMEOUT_MS,
+        maxBuffer: 20 * 1024 * 1024,
+      });
+      return JSON.parse(stdout);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
 
-  return JSON.parse(stdout);
+  throw lastErr;
 }
 
 router.get('/', async (req, res, next) => {
@@ -97,7 +123,14 @@ router.get('/', async (req, res, next) => {
       res.status(404).json({ success: false, message: 'Video not found' });
       return;
     }
-    if (/sign in to confirm your age|login required|members-only/i.test(stderr)) {
+    if (/sign in to confirm you(?:'|’)re not a bot|use --cookies|login required/i.test(stderr)) {
+      res.status(403).json({
+        success: false,
+        message: 'Video blocked by YouTube bot check. Configure YTDLP_COOKIES_FILE on server.',
+      });
+      return;
+    }
+    if (/sign in to confirm your age|members-only/i.test(stderr)) {
       res.status(403).json({ success: false, message: 'Video requires authentication' });
       return;
     }
