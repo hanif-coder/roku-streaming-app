@@ -1,7 +1,14 @@
 const express = require('express');
-const axios = require('axios');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
 const router = express.Router();
+const execFileAsync = promisify(execFile);
+const YTDLP_TIMEOUT_MS = 30000;
+
+function buildWatchUrl(videoId) {
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
 
 function parseExpireFromUrl(url) {
   if (!url || typeof url !== 'string') return null;
@@ -16,39 +23,33 @@ function parseExpireFromUrl(url) {
   }
 }
 
-function pickStreamFromAdaptiveFormats(adaptiveFormats) {
-  if (!Array.isArray(adaptiveFormats) || adaptiveFormats.length === 0) return null;
-
-  const withHlsUrl = adaptiveFormats.find((f) => f.hlsUrl);
-  if (withHlsUrl?.hlsUrl) return withHlsUrl.hlsUrl;
-
-  const hlsFormat = adaptiveFormats.find(
-    (f) => f.mimeType && String(f.mimeType).includes('application/x-mpegURL')
-  );
-  if (hlsFormat?.url) return hlsFormat.url;
-  if (hlsFormat?.hlsUrl) return hlsFormat.hlsUrl;
-
-  const mp4WithAudio = adaptiveFormats
-    .filter(
-      (f) =>
-        f.mimeType &&
-        (String(f.mimeType).includes('video/mp4') || String(f.mimeType).includes('audio/mp4'))
-    )
-    .sort((a, b) => (b.bitrate || b.qualityLabel || 0) - (a.bitrate || a.qualityLabel || 0));
-  if (mp4WithAudio[0]?.url) return mp4WithAudio[0].url;
-
-  const anyWithUrl = adaptiveFormats.find((f) => f.url);
-  return anyWithUrl?.url || null;
+function pickStreamUrl(meta) {
+  if (typeof meta?.url === 'string' && meta.url.length > 0) return meta.url;
+  if (Array.isArray(meta?.requested_formats)) {
+    const first = meta.requested_formats.find((f) => typeof f?.url === 'string' && f.url.length > 0);
+    if (first?.url) return first.url;
+  }
+  return null;
 }
 
-function pickStreamFromFormatStreams(formatStreams) {
-  if (!Array.isArray(formatStreams) || formatStreams.length === 0) return null;
-  const mp4 = formatStreams
-    .filter((f) => f.type && String(f.type).includes('video/mp4'))
-    .sort((a, b) => (b.bitrate || b.quality || 0) - (a.bitrate || a.quality || 0));
-  if (mp4[0]?.url) return mp4[0].url;
-  const any = formatStreams.find((f) => f.url);
-  return any?.url || null;
+async function getVideoMetaFromYtDlp(videoId) {
+  const ytDlpPath = process.env.YTDLP_PATH || 'yt-dlp';
+  const args = [
+    '--no-playlist',
+    '--dump-single-json',
+    '--no-warnings',
+    '--skip-download',
+    '--format',
+    'best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=mp4]/best',
+    buildWatchUrl(videoId),
+  ];
+
+  const { stdout } = await execFileAsync(ytDlpPath, args, {
+    timeout: YTDLP_TIMEOUT_MS,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+
+  return JSON.parse(stdout);
 }
 
 router.get('/', async (req, res, next) => {
@@ -59,29 +60,8 @@ router.get('/', async (req, res, next) => {
       return;
     }
     const videoId = String(id).trim();
-
-    const baseUrl = process.env.INVIDIOUS_BASE_URL;
-    if (!baseUrl) {
-      res.status(500).json({ success: false, message: 'Video service is not configured' });
-      return;
-    }
-
-    const url = `${baseUrl.replace(/\/$/, '')}/api/v1/videos/${videoId}`;
-    const { data } = await axios.get(url, {
-      params: { local: 'true' },
-      timeout: 15000,
-    });
-
-    const title = data.title ?? '';
-    const description = data.description ?? '';
-    const author = data.author ?? '';
-    const lengthSeconds = data.lengthSeconds ?? 0;
-    const adaptiveFormats = data.adaptiveFormats ?? [];
-    const formatStreams = data.formatStreams ?? [];
-
-    const streamUrl =
-      pickStreamFromAdaptiveFormats(adaptiveFormats) ||
-      pickStreamFromFormatStreams(formatStreams);
+    const meta = await getVideoMetaFromYtDlp(videoId);
+    const streamUrl = pickStreamUrl(meta);
     if (!streamUrl) {
       res.status(502).json({
         success: false,
@@ -95,23 +75,34 @@ router.get('/', async (req, res, next) => {
     res.json({
       success: true,
       videoId,
-      title,
-      author,
-      lengthSeconds,
+      title: meta.title ?? '',
+      author: meta.uploader ?? meta.channel ?? '',
+      lengthSeconds: Number(meta.duration ?? 0) || 0,
       streamUrl,
       expireAt,
     });
   } catch (err) {
-    if (err.response?.status === 404) {
+    const stderr = String(err.stderr || '');
+    if (err.code === 'ENOENT') {
+      res.status(500).json({ success: false, message: 'yt-dlp is not installed on server' });
+      return;
+    }
+    if (err.killed || err.signal === 'SIGTERM') {
+      res.status(504).json({ success: false, message: 'Video extraction timed out' });
+      return;
+    }
+    if (
+      /video unavailable|private video|This video is unavailable|no longer available/i.test(stderr)
+    ) {
       res.status(404).json({ success: false, message: 'Video not found' });
       return;
     }
-    if (err.response) {
-      res.status(500).json({ success: false, message: 'Upstream video request failed' });
+    if (/sign in to confirm your age|login required|members-only/i.test(stderr)) {
+      res.status(403).json({ success: false, message: 'Video requires authentication' });
       return;
     }
-    if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT') {
-      res.status(503).json({ success: false, message: 'Video service unavailable' });
+    if (stderr) {
+      res.status(502).json({ success: false, message: 'Video extraction failed' });
       return;
     }
     next(err);
