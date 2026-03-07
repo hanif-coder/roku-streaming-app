@@ -35,12 +35,13 @@ function pickStreamUrl(meta) {
 async function getVideoMetaFromYtDlp(videoId) {
   const ytDlpPath = process.env.YTDLP_PATH || 'yt-dlp';
   const baseArgs = [
+    '--ignore-config',
     '--no-playlist',
     '--dump-single-json',
     '--no-warnings',
     '--skip-download',
     '--format',
-    'best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=mp4]/best',
+    'best[acodec!=none][vcodec!=none]/best',
   ];
   const cookiesFile = process.env.YTDLP_COOKIES_FILE;
   const cookiesArgs = cookiesFile ? ['--cookies', cookiesFile] : [];
