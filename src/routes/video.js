@@ -34,6 +34,13 @@ function pickStreamUrl(meta) {
 
 async function getVideoMetaFromYtDlp(videoId) {
   const ytDlpPath = process.env.YTDLP_PATH || 'yt-dlp';
+  const extraArgs = [];
+  if (process.env.YTDLP_PROXY) {
+    extraArgs.push('--proxy', process.env.YTDLP_PROXY);
+  }
+  if (process.env.YTDLP_EXTRACTOR_ARGS) {
+    extraArgs.push('--extractor-args', process.env.YTDLP_EXTRACTOR_ARGS);
+  }
   const baseArgs = [
     '--ignore-config',
     '--no-playlist',
@@ -42,6 +49,7 @@ async function getVideoMetaFromYtDlp(videoId) {
     '--skip-download',
     '--format',
     'best[acodec!=none][vcodec!=none]/best',
+    ...extraArgs,
   ];
   const cookiesFile = process.env.YTDLP_COOKIES_FILE;
   const cookiesArgs = cookiesFile ? ['--cookies', cookiesFile] : [];
